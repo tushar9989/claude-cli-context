@@ -86,6 +86,20 @@ By hand: copy `themes/chat-dark.json` and `themes/chat-light.json` into `~/.clau
 
 To change the colours, edit `userMessageBackground` in the dark and light files. Colours can be `ansi256(n)`, `rgb(r,g,b)` or `#rrggbb`.
 
+## Uninstall
+
+```sh
+make uninstall
+```
+
+It removes only what the install put there:
+
+- `statusLine` from `settings.json` if it runs this script, and `theme` if it is one of the Chat themes, so Claude Code goes back to its default. Your other settings, and a status line of your own, are kept.
+- `statusline.sh` and the three Chat theme files. Your other themes are kept, and the folder is removed only if it ends up empty.
+- The usage history in `~/.cache/claude-statusline/`. This happens only when uninstalling from the default `~/.claude`, since every install shares the history.
+
+As with install, a file that differs from this repo's copy is backed up before it goes, and `settings.json` is backed up before it changes. Backups stay in place; to get your previous status line back, restore its `.bak-<date>-<time>` copy by hand. `make uninstall CLAUDE_DIR=<folder>` removes a trial install.
+
 ## Notes on Terminal.app
 
 - Claude Code draws only 256 colours in Terminal.app, even though the terminal reports true colour. The script uses explicit 256-colour codes and matches Claude Code's own rgb-to-256 mapping, so the reset times show in the same colour as inline code in the chat.
