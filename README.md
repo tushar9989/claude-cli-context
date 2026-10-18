@@ -52,11 +52,18 @@ Tested with Claude Code 2.1.302 in macOS Terminal.app.
 ```sh
 git clone https://github.com/tushar9989/claude-cli-context.git
 cd claude-cli-context
-cp statusline.sh ~/.claude/statusline.sh
-chmod +x ~/.claude/statusline.sh
+make install
 ```
 
-Then add this to `~/.claude/settings.json`, keeping your other settings:
+`make install`:
+
+- copies `statusline.sh` to `~/.claude/`, and the Chat themes to `~/.claude/themes/` (creating `chat-auto.json` if you don't have one);
+- sets `statusLine` in `~/.claude/settings.json` and keeps your other settings;
+- backs up any file it replaces with something different as `<file>.bak-<date>-<time>`, so running it again changes nothing.
+
+`make install CLAUDE_DIR=<folder>` installs somewhere else, for example to try it out first. Then pick a Chat theme with `/theme` (see below).
+
+To install by hand instead, copy `statusline.sh` to `~/.claude/`, make it executable, and add this to `~/.claude/settings.json`:
 
 ```json
 "statusLine": {
@@ -71,14 +78,11 @@ Then add this to `~/.claude/settings.json`, keeping your other settings:
 
 ### Chat themes
 
-```sh
-mkdir -p ~/.claude/themes
-cp themes/chat-dark.json themes/chat-light.json ~/.claude/themes/
-```
+Pick **Chat (dark)**, **Chat (light)** or **Chat (auto)** with `/theme`. Claude Code watches `~/.claude/themes/` for changes, but only if the folder existed when it started, so restart it once if the install just created the folder.
 
-Pick **Chat (dark)** or **Chat (light)** with `/theme`. Claude Code watches `~/.claude/themes/` for changes, but only if the folder existed when it started, so restart it once if you just created the folder.
+**Chat (auto)** follows the macOS appearance. Custom themes can't have an automatic base, so the status line keeps `chat-auto.json` a copy of the dark or light theme, whichever matches the appearance, and Claude Code reloads it live. Delete the file to stop.
 
-To follow the macOS appearance, also create `~/.claude/themes/chat-auto.json` (a copy of either file will do) and pick **Chat (auto)**. Custom themes can't have an automatic base, so the status line keeps this file a copy of the dark or light theme, whichever matches the appearance, and Claude Code reloads it live. Delete the file to stop.
+By hand: copy `themes/chat-dark.json` and `themes/chat-light.json` into `~/.claude/themes/`, and for Chat (auto) also a copy of either one named `chat-auto.json`.
 
 To change the colours, edit `userMessageBackground` in the dark and light files. Colours can be `ansi256(n)`, `rgb(r,g,b)` or `#rrggbb`.
 
