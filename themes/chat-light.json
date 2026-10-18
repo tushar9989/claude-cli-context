@@ -1,0 +1,8 @@
+{
+  "name": "Chat (light)",
+  "base": "light",
+  "overrides": {
+    "userMessageBackground": "ansi256(153)",
+    "userMessageBackgroundHover": "ansi256(189)"
+  }
+}

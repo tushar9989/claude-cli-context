@@ -1,0 +1,8 @@
+{
+  "name": "Chat (dark)",
+  "base": "dark",
+  "overrides": {
+    "userMessageBackground": "ansi256(24)",
+    "userMessageBackgroundHover": "ansi256(25)"
+  }
+}
