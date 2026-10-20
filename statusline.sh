@@ -38,6 +38,24 @@ fi
 
 now=$(date +%s)
 
+# When this session last heard from the API. Usage limits arrive at the start of each reply and an idle
+# session keeps reporting what it last heard, so this says how fresh its readings are: the time of the
+# request behind its last reply in the transcript (the reply itself is written once its first block is
+# done, which can be minutes later), or the reply's own time if the request isn't logged. Empty when
+# unknown. macOS tail -c takes ~35 ms per MB, so look at the last 300 KB first.
+seen=""
+if [[ -f $transcript ]]; then
+  for bytes in 300000 3000000; do
+    seen=$(tail -c "$bytes" "$transcript" 2>/dev/null | grep -F -e '"type":"assistant"' -e '"type":"api-request"' | jq -R -r -n '
+      [inputs | fromjson? | select(.type == "assistant" or .type == "api-request")] as $lines
+      | ($lines | map(select(.type == "api-request") | {key: (.id | tostring), value: .timestamp}) | from_entries) as $requests
+      | ($lines | map(select(.type == "assistant")) | last) as $reply
+      | select($reply != null) | ($requests[$reply.requestRef // ""] // $reply.timestamp)
+      | try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor) catch empty' 2>/dev/null)
+    [[ -n $seen ]] && break
+  done
+fi
+
 # Explicit 256-colour palette (no faint/dim text, which Terminal.app fades into the background),
 # picked by the macOS appearance so it reads on both dark and light terminal backgrounds.
 dark=0
@@ -94,32 +112,51 @@ duration() {
 hist_dir=${XDG_CACHE_HOME:-$HOME/.cache}/claude-statusline
 mkdir -p "$hist_dir" 2>/dev/null
 
-# History of "reset_epoch time used%" for the current window, shared by every session on this account.
-# A sample is added when the value rises or every `every` seconds; a later window starts a fresh file.
-# Idle sessions keep reporting the value from their last reply, so a reading below the saved one, or from
-# an earlier window, is stale and skipped. Prints the freshest known value for this window.
-record() { # file used_percent reset_epoch every_seconds
-  local file=$1 p=$2 reset=$3 every=$4 last_reset="" last_t="" last_p="" d
-  [[ -s $file ]] && read -r last_reset last_t last_p < <(tail -n 1 "$file")
+# History of "reset_epoch time used% seen" for the current window, shared by every session on this account
+# (seen: when the reading came from the API). A sample is added when the value changes or every `every` seconds.
+# Idle sessions keep reporting what they last heard, so a reading heard before the newest saved one is stale:
+# it is skipped and the saved one shown. A fresher reading starts a new history when it is for another window,
+# or when it is over a point lower in the same window: the limit was reset early (e.g. mid-week). Then
+# "# start <time>" goes first, the last time the old value was heard, and the projection counts from there.
+# Usage never falls within a window, so a fresh reading up to a point lower is timing noise between sessions
+# and the saved value stands. Without a seen time, any reading below the saved one counts as stale.
+# Prints "reset_epoch used%" of the freshest reading.
+record() { # file used_percent reset_epoch every_seconds seen_epoch
+  local file=$1 p=$2 reset=$3 every=$4 seen=$5 last_reset="" last_t="" last_p="" last_seen="" d start="" new=0 drop
+  [[ -s $file ]] && read -r last_reset last_t last_p last_seen < <(awk '$1 != "#"' "$file" | tail -n 1)
   if [[ -n $last_reset ]]; then
-    d=$(( reset - last_reset ))
-    if (( d < -600 )); then echo "$p"; return; fi
-    if (( d > 600 )); then : >"$file"; last_t=""; last_p=""; fi
+    d=$(( reset - last_reset )); last_seen=${last_seen:-$last_t}
+    drop=$(awk -v a="$p" -v b="$last_p" 'BEGIN { print (a < b - 1) ? "big" : (a < b) ? "small" : "none" }')
+    if [[ -n $seen ]]; then
+      # A window that is over can't be fresher than anything reported now.
+      if (( seen < last_seen && last_reset > now )); then echo "$last_reset $last_p"; return; fi
+      if (( d >= -600 && d <= 600 )); then
+        if [[ $drop == big ]]; then start=$last_seen; new=1
+        elif [[ $drop == small ]]; then echo "$last_reset $last_p"; return; fi
+      fi
+    else
+      if (( d < -600 )); then echo "$reset $p"; return; fi
+      if (( d <= 600 )) && [[ $drop != none ]]; then echo "$last_reset $last_p"; return; fi
+    fi
+    (( d < -600 || d > 600 )) && new=1
   fi
-  if [[ -n $last_p ]] && awk -v a="$p" -v b="$last_p" 'BEGIN { exit !(a < b) }'; then
-    echo "$last_p"; return
+  local line
+  line=$(printf '%s %s %s %s' "$reset" "$now" "$p" "${seen:-$now}")
+  if (( new )); then
+    # One write, so another session never reads the header without a sample after it.
+    if [[ -n $start ]]; then printf '# start %s\n%s\n' "$start" "$line" >"$file"; else printf '%s\n' "$line" >"$file"; fi
+  elif [[ -z $last_t || $p != "$last_p" ]] || (( now - last_t >= every )); then
+    printf '%s\n' "$line" >>"$file"
   fi
-  if [[ -z $last_t || $p != "$last_p" ]] || (( now - last_t >= every )); then
-    printf '%s %s %s\n' "$reset" "$now" "$p" >>"$file"
-  fi
-  echo "$p"
+  echo "$reset $p"
 }
 
 # Prints "seconds_to_100 percent_at_reset percent_per_hour": seconds until the limit reaches 100% (-1 if the
 # fitted pace levels off first, 0 if already there), where the trend leaves usage when the window resets,
 # and the fitted pace now.
 # Weighted least squares over the window's history, recent samples weighted most (half-life given),
-# anchored at 0% when the window opened, so with no history yet it equals the window average.
+# anchored at 0% when the window opened (or at its "# start" after an early reset), so with no history yet
+# it equals the window average.
 # Quadratic once the history spans at least the time left to reset (a curve is never extrapolated
 # further than it was observed); linear otherwise. A quadratic whose slope now is negative means usage
 # has levelled off (a night does not do this, a day or two idle does), so the pace is taken as flat.
@@ -133,9 +170,10 @@ project() { # file used_percent reset_epoch window_seconds half_life_seconds
       T0 += k * y; T1 += k * x * y; T2 += k * x^2 * y
     }
     function det(a, b, c, d, e, f, g, h, i) { return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g) }
+    $1 == "#" { if ($2 == "start") s = $3; next }
     $2 < now { add($2, $3); n++; if (!first || $2 < first) first = $2 }
     END {
-      start = r - w
+      start = r - w; if (s > start) start = s
       if (now - start < 600) exit
       add(start, 0); add(now, p)
       need = 100 - p
@@ -172,7 +210,7 @@ limit() { # label used_percent reset_epoch window_seconds sample_every_seconds h
   local label=$1 raw=$2 reset=$3 window=$4 every=$5 half_life=$6 name=$7
   [[ -z $raw ]] && return
   local file="$hist_dir/$name.txt" p left out="" proj="" per_hour=""
-  [[ -n $reset ]] && raw=$(record "$file" "$raw" "$reset" "$every")
+  [[ -n $reset ]] && read -r reset raw < <(record "$file" "$raw" "$reset" "$every" "$seen")
   p=$(printf '%.0f' "$raw")
   printf '%s%s%s %s%s%%%s' "$c_label" "$label" "$rst" "$(level "$p")" "$p" "$rst"
   [[ -z $reset ]] && return

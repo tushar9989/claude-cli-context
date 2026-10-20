@@ -32,12 +32,18 @@ Values are bold white while fine, amber from 50% and red from 80%. `out` and `fu
 Every refresh records each limit's value in `~/.cache/claude-statusline/` (shared by all sessions on the machine). The projection fits a curve to the current window's history by weighted least squares:
 
 - Recent samples count most, with a half-life of 1 hour for the 5-hour limit and 1 day for the weekly one, so nights average out.
-- The curve is anchored at 0% when the window opened.
+- The curve is anchored at 0% when the window opened, or when the limit was reset early (see below).
 - It is a straight line until the history covers at least the time left before reset; then it is a quadratic, so speeding up or slowing down shows. A curve is never extrapolated further than it was observed.
 - If the fitted curve is falling now, usage has levelled off and the pace is taken as flat.
 - Nothing is projected in a window's first 10 minutes.
 
 Early in a weekly window a few busy hours get extrapolated over the whole week, so `out` can show too early until there is about a day of history.
+
+### Idle sessions and early resets
+
+Each session reports the limits it last heard from the API, so an idle session's numbers can be hours old. Every reading is therefore dated by the request behind the session's last reply (read from the end of its transcript), and only the freshest reading counts; every session shows that one.
+
+When a limit is reset early, for example a weekly limit reset mid-week, its `resets_at` can stay the same while usage drops. A fresh reading more than a point lower than the saved one in the same window is taken as such a reset: the history starts over, and the projection counts from the last time the old value was heard. A smaller dip is timing noise between sessions (usage never falls within a window), so the saved value stands.
 
 ## Requirements
 
