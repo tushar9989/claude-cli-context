@@ -46,6 +46,8 @@ The weekly limit uses the pace of the last few hours, recent hours counting most
 
 Because the weekly projection follows the last few hours, a busy evening can show `out` and a quiet night can show `ends` well below 100%.
 
+When a window ends or is reset early, its history is added to `5h-archive.txt` or `week-archive.txt` in the same folder and kept for 90 days, so the projection can be tested against more of your real usage later. Even with heavy use that is a few megabytes.
+
 ### Idle sessions and early resets
 
 Each session reports the limits it last heard from the API, so an idle session's numbers can be hours old. Every reading is therefore dated by the request behind the session's last reply (read from the end of its transcript), and only the freshest reading counts; every session shows that one.
@@ -109,7 +111,7 @@ It removes only what the install put there:
 
 - `statusLine` from `settings.json` if it runs this script, and `theme` if it is one of the Chat themes, so Claude Code goes back to its default. Your other settings, and a status line of your own, are kept.
 - `statusline.sh` and the three Chat theme files. Your other themes are kept, and the folder is removed only if it ends up empty.
-- The usage history in `~/.cache/claude-statusline/`. This happens only when uninstalling from the default `~/.claude`, since every install shares the history.
+- The usage history and its archive in `~/.cache/claude-statusline/`. This happens only when uninstalling from the default `~/.claude`, since every install shares the history.
 
 As with install, a file that differs from this repo's copy is backed up before it goes, and `settings.json` is backed up before it changes. Backups stay in place; to get your previous status line back, restore its `.bak-<date>-<time>` copy by hand. `make uninstall CLAUDE_DIR=<folder>` removes a trial install.
 

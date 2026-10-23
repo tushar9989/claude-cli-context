@@ -88,7 +88,8 @@ uninstall: check-settings
 	@if [ -d "$(THEMES)" ] && rmdir "$(THEMES)" 2>/dev/null; then echo "  removed    $(THEMES)/ (it was empty)"; fi
 	@# The usage history is shared, so it goes only with the install in the default place.
 	@set -e; if [ -n "$(DEFAULT_DIR)" ]; then \
-	  for f in "$(CACHE)/5h.txt" "$(CACHE)/week.txt"; do if [ -e "$$f" ]; then rm -f "$$f"; echo "  removed    $$f"; fi; done; \
+	  for f in "$(CACHE)/5h.txt" "$(CACHE)/week.txt" "$(CACHE)/5h-archive.txt" "$(CACHE)/week-archive.txt"; do \
+	    if [ -e "$$f" ]; then rm -f "$$f"; echo "  removed    $$f"; fi; done; \
 	  if [ -d "$(CACHE)" ] && rmdir "$(CACHE)" 2>/dev/null; then echo "  removed    $(CACHE)/ (it was empty)"; fi; \
 	fi
 	@echo "Done. Backups ending in .bak-<date>-<time> are kept; restore one by hand to get an earlier file back."

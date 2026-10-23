@@ -143,12 +143,36 @@ record() { # file used_percent reset_epoch every_seconds seen_epoch
   local line
   line=$(printf '%s %s %s %s' "$reset" "$now" "$p" "${seen:-$now}")
   if (( new )); then
-    # One write, so another session never reads the header without a sample after it.
-    if [[ -n $start ]]; then printf '# start %s\n%s\n' "$start" "$line" >"$file"; else printf '%s\n' "$line" >"$file"; fi
+    # Written aside and moved in, so another session never reads the header without a sample after it. The
+    # finished window is moved aside first and archived; only one session can move it.
+    local tmp="$file.new.$$" done="$file.done.$$"
+    if [[ -n $start ]]; then printf '# start %s\n%s\n' "$start" "$line" >"$tmp"; else printf '%s\n' "$line" >"$tmp"; fi
+    if [[ -s $file ]] && mv "$file" "$done" 2>/dev/null; then
+      mv "$tmp" "$file"; archive "$done" "$last_reset" "$last_t" "${file%.txt}-archive.txt"
+    else
+      mv "$tmp" "$file"
+    fi
   elif [[ -z $last_t || $p != "$last_p" ]] || (( now - last_t >= every )); then
     printf '%s\n' "$line" >>"$file"
   fi
   echo "$reset $p"
+}
+
+# Finished windows are kept for later study (backtests, daily and weekly patterns): appended to 5h-archive.txt
+# and week-archive.txt as blocks headed "# archived <time>". Only lines of the finished window go in: another
+# session that saw the same reset may have moved aside the new one, just started. Blocks are kept 90 days; the
+# file is rewritten without older ones once its oldest is 120 days old, about once a month.
+archive() { # moved_file last_reset last_time archive_file
+  local first
+  awk -v r="$2" -v l="$3" -v now="$now" '
+    $1 == "#" || (($1 - r) * ($1 - r) <= 360000 && $2 <= l) { b[++n] = $0; if ($1 != "#") d++ }
+    END { if (d) { print "# archived", now; for (i = 1; i <= n; i++) print b[i] } }' "$1" >>"$4"
+  rm -f "$1"
+  read -r _ _ first <"$4"
+  if [[ $first =~ ^[0-9]+$ ]] && (( now - first > 120 * 86400 )); then
+    awk -v cut=$(( now - 90 * 86400 )) '$1 == "#" && $2 == "archived" { keep = $3 >= cut } keep' "$4" >"$4.$$" &&
+      mv "$4.$$" "$4"
+  fi
 }
 
 # Prints "seconds_to_100 percent_at_reset percent_per_hour": seconds until the limit reaches 100% (-1 if the
