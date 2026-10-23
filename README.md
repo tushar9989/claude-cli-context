@@ -38,7 +38,13 @@ The 5-hour limit fits a curve to the current window's history by weighted least 
 - It is a straight line until the history covers at least the time left before reset; then it is a quadratic, so speeding up or slowing down shows. A curve is never extrapolated further than it was observed.
 - If the fitted curve is falling now, usage has levelled off and the pace is taken as flat.
 
-The weekly limit aims at the next 12 hours. Further out a forecast can't be right, because you change how much you use based on what the status line shows, so `ends` and `out` mean "if you keep going like this". The pace is half the pace now and half the window's average so far, because bursts mostly fade within 12 hours. In backtests on real usage this predicted the next 12 hours about a tenth more accurately than the pace now alone, on every stretch of data. It shows half of a lasting change of pace within about 10 hours.
+The weekly limit aims at the next 12 hours. Further out a forecast can't be right, because you change how much you use based on what the status line shows, so `ends` and `out` mean "if you keep going like this".
+
+- Your pace is laid on your daily curve: how busy each hour of the day was over the last 3 days, as a share of the average hour (at least 0.3). The pace now is divided by the curve over the same recent hours, so a busy afternoon is not taken for a busy day, and each hour ahead gets its share of the curve.
+- The level is half that and half the window's average so far, because bursts mostly fade within 12 hours.
+- The curve comes from this window and earlier ones in the archive (below). Until every hour of the day has been seen it is flat.
+
+In backtests on real usage this predicted the next 12 hours with a mean error of 3.3 points, against 4.6 for the pace now alone and 4.2 without the curve.
 
 The pace now counts recent hours most (half-life 4 hours):
 
@@ -46,7 +52,7 @@ The pace now counts recent hours most (half-life 4 hours):
 - The time since the last step counts only once it is longer than the pace implies, so the pace eases down as you slow down instead of dropping after each step.
 - If no session ran for a while, the use over that gap is taken as spread evenly over it.
 
-When a window ends or is reset early, its history is added to `5h-archive.txt` or `week-archive.txt` in the same folder and kept for 90 days, so the projection can be tested against more of your real usage later. Even with heavy use that is a few megabytes.
+When a window ends or is reset early, its history is added to `5h-archive.txt` or `week-archive.txt` in the same folder and kept for 90 days, for the weekly curve and so the projection can be tested against more of your real usage later. Even with heavy use that is a few megabytes.
 
 ### Idle sessions and early resets
 

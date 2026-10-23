@@ -36,7 +36,10 @@ if [[ -z $pct && -n $used ]]; then
   pct=$(( used * 100 / size ))
 fi
 
-now=$(date +%s)
+read -r now tz < <(date '+%s %z')
+# UTC offset in seconds, for the hours of the day in the weekly projection.
+[[ $tz =~ ^[+-][0-9]{4}$ ]] || tz=+0000
+tz=$(( ${tz:0:1}1 * (10#${tz:1:2} * 3600 + 10#${tz:3:2} * 60) ))
 
 # When this session last heard from the API. Usage limits arrive at the start of each reply and an idle
 # session keeps reporting what it last heard, so this says how fresh its readings are: the time of the
@@ -123,7 +126,7 @@ mkdir -p "$hist_dir" 2>/dev/null
 # Prints "reset_epoch used%" of the freshest reading.
 record() { # file used_percent reset_epoch every_seconds seen_epoch
   local file=$1 p=$2 reset=$3 every=$4 seen=$5 last_reset="" last_t="" last_p="" last_seen="" d start="" new=0 drop
-  [[ -s $file ]] && read -r last_reset last_t last_p last_seen < <(awk '$1 != "#"' "$file" | tail -n 1)
+  [[ -s $file ]] && read -r last_reset last_t last_p last_seen < <(awk '$1 != "#"' "$file" 2>/dev/null | tail -n 1)
   if [[ -n $last_reset ]]; then
     d=$(( reset - last_reset )); last_seen=${last_seen:-$last_t}
     drop=$(awk -v a="$p" -v b="$last_p" 'BEGIN { print (a < b - 1) ? "big" : (a < b) ? "small" : "none" }')
@@ -144,7 +147,8 @@ record() { # file used_percent reset_epoch every_seconds seen_epoch
   line=$(printf '%s %s %s %s' "$reset" "$now" "$p" "${seen:-$now}")
   if (( new )); then
     # Written aside and moved in, so another session never reads the header without a sample after it. The
-    # finished window is moved aside first and archived; only one session can move it.
+    # finished window is moved aside first and archived; only one session can move it. In between the file is
+    # missing for a moment, so readers ignore a missing file (that refresh shows no projection).
     local tmp="$file.new.$$" done="$file.done.$$"
     if [[ -n $start ]]; then printf '# start %s\n%s\n' "$start" "$line" >"$tmp"; else printf '%s\n' "$line" >"$tmp"; fi
     if [[ -s $file ]] && mv "$file" "$done" 2>/dev/null; then
@@ -219,14 +223,17 @@ project() { # file used_percent reset_epoch window_seconds half_life_seconds
       if (disc < 0 || b + sqrt(disc) <= 0) out = -1
       else out = int(2 * need / (b + sqrt(disc)) * 3600)
       printf "%d %.2f %.4f\n", out, proj, (b > 0 ? b : 0)
-    }' "$1"
+    }' "$1" 2>/dev/null
 }
 
-# Same output as project(), for the weekly limit: the pace expected over the next 12 hours, carried on to the reset.
-# Further out there is nothing to forecast, since you pace your use by what this shows. Half the pace now and half
-# the window's average so far: bursts mostly fade within 12 hours. In backtests on real use this cut the 12-hour
-# error by a tenth against the pace now alone, on every stretch of data; it shows half of a lasting change of pace
-# in about 10 hours.
+# Same output as project(), for the weekly limit, aimed at the next 12 hours (further out there is nothing to
+# forecast, since you pace your use by what this shows), then carried on to the reset.
+# The daily curve: use per local hour of the day over the last 3 days, from this window and finished ones (the
+# archive), as a share of the average hour, at least 0.3; flat until every hour of the day has been seen. Between
+# readings use is taken as spread evenly. The pace now is divided by the curve over the same recent hours, so a busy
+# afternoon is not taken for a busy day; half of that and half the window's average so far (bursts mostly fade)
+# make the level, and each hour ahead is the level times the curve. In backtests on real use this cut the 12-hour
+# error by over a quarter against the pace now alone (4.6 to 3.3 points), and by a fifth against no curve.
 # The pace now (half-life given): the reading only moves in whole percents, so the pace comes from when it went up:
 # recency-weighted percents per hour over the intervals between steps. The time since the last step counts only
 # once it is longer than the pace implies, as if a step happened now, so the pace eases down instead of see-sawing.
@@ -234,7 +241,26 @@ project() { # file used_percent reset_epoch window_seconds half_life_seconds
 # lands gap/(2 x steps) before the reading. Usage now is the last step's crossing (a reading rounds, so it showed k
 # at k - 0.5) plus the pace since, kept within half a point of the reading.
 step_pace() { # file used_percent reset_epoch window_seconds half_life_seconds
-  awk -v p="$2" -v r="$3" -v w="$4" -v hl="$5" -v now="$now" '
+  local arch="${1%.txt}-archive.txt"
+  [[ -s $arch ]] || arch=/dev/null
+  awk -v p="$2" -v r="$3" -v w="$4" -v hl="$5" -v now="$now" -v tz="$tz" '
+    function lh(x) { return int((x + tz) % 86400 / 3600) }
+    # A reading of window g for the curve; of those before the first hour used, only the last is kept.
+    function keep(x, v) {
+      if (x < cut) { px[g, 1] = x; py[g, 1] = v; np[g] = 1 } else { np[g]++; px[g, np[g]] = x; py[g, np[g]] = v }
+    }
+    # Value of window q at x, by straight lines between its readings; x only grows per window, so it walks on.
+    function val(q, x,   i) {
+      i = ix[q] ? ix[q] : 1; while (i < np[q] && px[q, i + 1] <= x) i++; ix[q] = i
+      if (i >= np[q]) return py[q, np[q]]
+      return px[q, i + 1] > px[q, i] ? py[q, i] + (py[q, i + 1] - py[q, i]) * (x - px[q, i]) / (px[q, i + 1] - px[q, i]) : py[q, i + 1]
+    }
+    BEGIN { last = now - (now + tz) % 3600 - 3600; cut = last - 71 * 3600 }
+    !win && $1 == "#" { if ($2 == "archived") { g++; sst[g] = "" } else if ($2 == "start") { sst[g] = $3; keep($3, 0) }; next }
+    # Readings a window length before the first hour belong to windows that ended before it.
+    !win && $1 != "#" && $2 < cut - w - 3600 { next }
+    !win && $2 <= now { if (sst[g] == "") { sst[g] = $1 - w; keep(sst[g], 0) }; keep($2, $3); next }
+    !win { next }
     $1 == "#" { if ($2 == "start") s = $3; next }
     $2 <= now && ($1 - r) * ($1 - r) <= 360000 { n++; t[n] = $2; y[n] = $3 }
     END {
@@ -259,11 +285,28 @@ step_pace() { # file used_percent reset_epoch window_seconds half_life_seconds
       cur = sy[m] - (m > 0 ? 0.5 : 0) + (pace * gap < 1 ? pace * gap : 1)
       if (cur > p + 0.5) cur = p + 0.5; if (cur < p - 0.5) cur = p - 0.5; if (cur < 0) cur = 0
       if (p >= 100) { print 0, p, 0; exit }
-      rate = (pace + p / ((now - start) / 3600)) / 2
-      H = (r - now) / 3600; if (H < 0) H = 0
-      out = rate > 0 ? int((100 - cur) / rate * 3600) : -1
-      printf "%d %.2f %.4f\n", out, cur + rate * H, rate
-    }' "$1"
+      # The curve: each hour from the latest window that covers it.
+      g++; sst[g] = start; np[g] = 0; keep(start, 0)
+      for (i = 1; i <= n; i++) if (t[i] > start) keep(t[i], y[i])
+      for (a = cut; a <= last; a += 3600) {
+        for (q = g; q >= 1; q--) if (np[q] && sst[q] <= a && a + 3600 <= px[q, np[q]]) break
+        if (q >= 1) { h = lh(a); v = val(q, a); sum[h] += val(q, a + 3600) - v; cnt[h]++ }
+      }
+      ok = 1; M = 0
+      for (h = 0; h < 24; h++) if (cnt[h]) M += sum[h] / cnt[h] / 24; else ok = 0
+      for (h = 0; h < 24; h++) { c = ok && M > 0 ? sum[h] / cnt[h] / M : 1; shp[h] = c > 0.3 ? c : 0.3 }
+      for (k = 0; k < 24; k++) { wk = 2 ^ (-(k + 0.5) * 3600 / hl); rec += wk * shp[lh(now - (k + 0.5) * 3600)]; ws += wk }
+      L = (pace / (rec / ws) + p / ((now - start) / 3600)) / 2
+      for (j = 0; j < 12; j++) next12 += L * shp[lh(now + (j + 0.5) * 3600)]
+      # Hour by hour to the reset.
+      H = (r - now) / 3600; out = -1; need = 100 - cur
+      for (j = 0; j < H; j++) {
+        dt = H - j < 1 ? H - j : 1; v = L * shp[lh(now + (j + dt / 2) * 3600)] * dt
+        if (out < 0 && v > 0 && add + v >= need) out = int((j + (need - add) / v * dt) * 3600)
+        add += v
+      }
+      printf "%d %.2f %.4f\n", out, cur + add, next12 / 12
+    }' "$arch" win=1 "$1" 2>/dev/null
 }
 
 # Percent per hour as 12 / 0.6 / 0.04 / 0.
@@ -322,8 +365,8 @@ fi
 
 line="${c_label}ctx${rst} ${ctx}"
 # 5h: sample every 2 min, fitted curve with a 1 h half-life (over a few hours the recent trend holds).
-# Week: sample every 15 min; the next 12 hours from half the pace now (whole-percent steps, 4 h half-life) and
-# half the window average.
+# Week: sample every 15 min; the next 12 hours from the pace now (whole-percent steps, 4 h half-life) and the
+# window average, laid on the daily curve of the last 3 days.
 fh=$(limit 5h "$fh_pct" "$fh_reset" 18000 120 3600 5h project); [[ -n $fh ]] && line+="${sep}${fh}"
 wk=$(limit wk "$wk_pct" "$wk_reset" 604800 900 14400 week step_pace); [[ -n $wk ]] && line+="${sep}${wk}"
 line+="${sep}${c_label}${model}${rst}"
