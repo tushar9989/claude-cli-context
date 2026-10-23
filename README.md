@@ -29,15 +29,22 @@ Values are bold white while fine, amber from 50% and red from 80%. `out` and `fu
 
 ### How the projection works
 
-Every refresh records each limit's value in `~/.cache/claude-statusline/` (shared by all sessions on the machine). The projection fits a curve to the current window's history by weighted least squares:
+Every refresh records each limit's value in `~/.cache/claude-statusline/` (shared by all sessions on the machine). Both limits carry the pace you are on now to the reset. Nothing is projected in a window's first 10 minutes.
 
-- Recent samples count most, with a half-life of 1 hour for the 5-hour limit and 1 day for the weekly one, so nights average out.
+The 5-hour limit fits a curve to the current window's history by weighted least squares:
+
+- Recent samples count most, with a half-life of 1 hour.
 - The curve is anchored at 0% when the window opened, or when the limit was reset early (see below).
 - It is a straight line until the history covers at least the time left before reset; then it is a quadratic, so speeding up or slowing down shows. A curve is never extrapolated further than it was observed.
 - If the fitted curve is falling now, usage has levelled off and the pace is taken as flat.
-- Nothing is projected in a window's first 10 minutes.
 
-Early in a weekly window a few busy hours get extrapolated over the whole week, so `out` can show too early until there is about a day of history.
+The weekly limit uses the pace of the last few hours, recent hours counting most (half-life 4 hours). If you change how much you use because of what the status line shows, it has to follow quickly: it shows about half of a change of pace within 4 hours and 90% within 14. A curve fitted with a 1-day half-life took 32 hours to show half, and in backtests on real usage it was no more accurate.
+
+- The weekly reading moves only in whole percents, so the pace comes from when it went up: percent per hour over the times between steps. A plain average of the last few hours would jump with every step.
+- The time since the last step counts only once it is longer than the pace implies, so the pace eases down as you slow down instead of dropping after each step.
+- If no session ran for a while, the use over that gap is taken as spread evenly over it.
+
+Because the weekly projection follows the last few hours, a busy evening can show `out` and a quiet night can show `ends` well below 100%.
 
 ### Idle sessions and early resets
 

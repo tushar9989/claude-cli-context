@@ -198,6 +198,46 @@ project() { # file used_percent reset_epoch window_seconds half_life_seconds
     }' "$1"
 }
 
+# Same output as project(), for the weekly limit: the pace you are on now, carried to the reset. The owner adjusts
+# usage to what this shows, so recent hours count most (half-life given; 4 h follows a change of pace about half way
+# in 4-5 h, the 1-day fit took 32 h, and was no more accurate in backtests). The reading only moves in whole
+# percents, so the pace comes from when it went up: recency-weighted percents per hour over the intervals between
+# steps. The time since the last step counts only once it is longer than the pace implies, as if a step happened
+# now, so the pace eases down instead of see-sawing. Usage across a gap in the readings (no session running)
+# is taken as spread evenly over it, so the last step in it lands gap/(2 x steps) before the reading. Usage now is the last step's crossing
+# (a reading rounds, so it showed k at k - 0.5) plus the pace since, kept within half a point of the reading.
+step_pace() { # file used_percent reset_epoch window_seconds half_life_seconds
+  awk -v p="$2" -v r="$3" -v w="$4" -v hl="$5" -v now="$now" '
+    $1 == "#" { if ($2 == "start") s = $3; next }
+    $2 <= now && ($1 - r) * ($1 - r) <= 360000 { n++; t[n] = $2; y[n] = $3 }
+    END {
+      start = r - w; if (s > start) start = s
+      if (now - start < 600) exit
+      m = 0; st[0] = start; sy[0] = 0
+      for (i = 1; i <= n; i++) if (t[i] > start && y[i] > sy[m]) {
+        prev = (i > 1 && t[i - 1] > start) ? t[i - 1] : start
+        c = (t[i] - prev > 1200) ? t[i] - (t[i] - prev) / (2 * (y[i] - sy[m])) : t[i]
+        m++; st[m] = c; sy[m] = y[i]
+      }
+      if (p > sy[m]) { m++; st[m] = now; sy[m] = p }
+      for (i = 1; i <= m; i++) {
+        k = 2 ^ (-(now - (st[i - 1] + st[i]) / 2) / hl)
+        num += k * (sy[i] - sy[i - 1]); den += k * (st[i] - st[i - 1]) / 3600
+      }
+      gap = (now - st[m]) / 3600; pace = den > 0 ? num / den : 0
+      if (den <= 0 || gap * pace > 1) {
+        k = 2 ^ (-(now - (st[m] + now) / 2) / hl); num += k; den += k * gap
+        pace = den > 0 ? num / den : 0
+      }
+      cur = sy[m] - (m > 0 ? 0.5 : 0) + (pace * gap < 1 ? pace * gap : 1)
+      if (cur > p + 0.5) cur = p + 0.5; if (cur < p - 0.5) cur = p - 0.5; if (cur < 0) cur = 0
+      if (p >= 100) { print 0, p, 0; exit }
+      H = (r - now) / 3600; if (H < 0) H = 0
+      out = pace > 0 ? int((100 - cur) / pace * 3600) : -1
+      printf "%d %.2f %.4f\n", out, cur + pace * H, pace
+    }' "$1"
+}
+
 # Percent per hour as 12 / 0.6 / 0.04 / 0.
 rate() {
   awk -v r="$1" 'BEGIN { if (r >= 9.95) printf "%d", r + 0.5; else if (r >= 0.095) printf "%.1f", r
@@ -206,8 +246,8 @@ rate() {
 
 # "wk 61% reset 2d 12h, ends 91% (0.5%/h)", "wk 79% reset 1d 12h, out 1d 11h (1.8%/h)" when projected to
 # run out first, "wk 100% reset 9h 5m, full" once it has. Nothing when the limit is not reported.
-limit() { # label used_percent reset_epoch window_seconds sample_every_seconds half_life_seconds history_name
-  local label=$1 raw=$2 reset=$3 window=$4 every=$5 half_life=$6 name=$7
+limit() { # label used_percent reset_epoch window_seconds sample_every_seconds half_life_seconds history_name estimator
+  local label=$1 raw=$2 reset=$3 window=$4 every=$5 half_life=$6 name=$7 estimator=$8
   [[ -z $raw ]] && return
   local file="$hist_dir/$name.txt" p left out="" proj="" per_hour=""
   [[ -n $reset ]] && read -r reset raw < <(record "$file" "$raw" "$reset" "$every" "$seen")
@@ -215,7 +255,7 @@ limit() { # label used_percent reset_epoch window_seconds sample_every_seconds h
   printf '%s%s%s %s%s%%%s' "$c_label" "$label" "$rst" "$(level "$p")" "$p" "$rst"
   [[ -z $reset ]] && return
   left=$(( reset - now ))
-  read -r out proj per_hour < <(project "$file" "$raw" "$reset" "$window" "$half_life")
+  read -r out proj per_hour < <("$estimator" "$file" "$raw" "$reset" "$window" "$half_life")
   local left_s out_s="" pace=""
   left_s=$(duration "$left")
   if [[ -n $out ]] && (( out > 0 && out < left )); then
@@ -253,9 +293,10 @@ else
 fi
 
 line="${c_label}ctx${rst} ${ctx}"
-# 5h: sample every 2 min, 1 h half-life. Week: sample every 15 min, 1 day half-life (smooths out nights).
-fh=$(limit 5h "$fh_pct" "$fh_reset" 18000 120 3600 5h); [[ -n $fh ]] && line+="${sep}${fh}"
-wk=$(limit wk "$wk_pct" "$wk_reset" 604800 900 86400 week); [[ -n $wk ]] && line+="${sep}${wk}"
+# 5h: sample every 2 min, fitted curve with a 1 h half-life (over a few hours the recent trend holds).
+# Week: sample every 15 min, the pace now from the whole-percent steps with a 4 h half-life.
+fh=$(limit 5h "$fh_pct" "$fh_reset" 18000 120 3600 5h project); [[ -n $fh ]] && line+="${sep}${fh}"
+wk=$(limit wk "$wk_pct" "$wk_reset" 604800 900 14400 week step_pace); [[ -n $wk ]] && line+="${sep}${wk}"
 line+="${sep}${c_label}${model}${rst}"
 [[ -n $effort ]] && line+=" ${c_effort}${effort}${rst}"
 # Session name on its own bold row, which Claude Code draws just above its footer (the permission mode
