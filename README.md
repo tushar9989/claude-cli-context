@@ -21,7 +21,7 @@ The Chat themes put your own messages on a tinted block, so a long chat is easie
 | `ends 51%` | Where usage will be when it resets, if the current pace holds. |
 | `out 1d 3h` | Projected to reach 100% before it resets: time until it does. |
 | `full` | Limit reached. |
-| `(16%/h)` | The pace now. |
+| `(16%/h)` | The pace: the one now for the 5-hour limit, the one expected over the next 12 hours for the weekly limit. |
 | `Opus 5.5 xhigh` | Model and effort level. |
 | `~` | Current folder. |
 
@@ -29,7 +29,7 @@ Values are bold white while fine, amber from 50% and red from 80%. `out` and `fu
 
 ### How the projection works
 
-Every refresh records each limit's value in `~/.cache/claude-statusline/` (shared by all sessions on the machine). Both limits carry the pace you are on now to the reset. Nothing is projected in a window's first 10 minutes.
+Every refresh records each limit's value in `~/.cache/claude-statusline/` (shared by all sessions on the machine). Each limit's pace is carried on to the reset. Nothing is projected in a window's first 10 minutes.
 
 The 5-hour limit fits a curve to the current window's history by weighted least squares:
 
@@ -38,13 +38,13 @@ The 5-hour limit fits a curve to the current window's history by weighted least 
 - It is a straight line until the history covers at least the time left before reset; then it is a quadratic, so speeding up or slowing down shows. A curve is never extrapolated further than it was observed.
 - If the fitted curve is falling now, usage has levelled off and the pace is taken as flat.
 
-The weekly limit uses the pace of the last few hours, recent hours counting most (half-life 4 hours). If you change how much you use because of what the status line shows, it has to follow quickly: it shows about half of a change of pace within 4 hours and 90% within 14. A curve fitted with a 1-day half-life took 32 hours to show half, and in backtests on real usage it was no more accurate.
+The weekly limit aims at the next 12 hours. Further out a forecast can't be right, because you change how much you use based on what the status line shows, so `ends` and `out` mean "if you keep going like this". The pace is half the pace now and half the window's average so far, because bursts mostly fade within 12 hours. In backtests on real usage this predicted the next 12 hours about a tenth more accurately than the pace now alone, on every stretch of data. It shows half of a lasting change of pace within about 10 hours.
+
+The pace now counts recent hours most (half-life 4 hours):
 
 - The weekly reading moves only in whole percents, so the pace comes from when it went up: percent per hour over the times between steps. A plain average of the last few hours would jump with every step.
 - The time since the last step counts only once it is longer than the pace implies, so the pace eases down as you slow down instead of dropping after each step.
 - If no session ran for a while, the use over that gap is taken as spread evenly over it.
-
-Because the weekly projection follows the last few hours, a busy evening can show `out` and a quiet night can show `ends` well below 100%.
 
 When a window ends or is reset early, its history is added to `5h-archive.txt` or `week-archive.txt` in the same folder and kept for 90 days, so the projection can be tested against more of your real usage later. Even with heavy use that is a few megabytes.
 

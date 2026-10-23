@@ -222,14 +222,17 @@ project() { # file used_percent reset_epoch window_seconds half_life_seconds
     }' "$1"
 }
 
-# Same output as project(), for the weekly limit: the pace you are on now, carried to the reset. The owner adjusts
-# usage to what this shows, so recent hours count most (half-life given; 4 h follows a change of pace about half way
-# in 4-5 h, the 1-day fit took 32 h, and was no more accurate in backtests). The reading only moves in whole
-# percents, so the pace comes from when it went up: recency-weighted percents per hour over the intervals between
-# steps. The time since the last step counts only once it is longer than the pace implies, as if a step happened
-# now, so the pace eases down instead of see-sawing. Usage across a gap in the readings (no session running)
-# is taken as spread evenly over it, so the last step in it lands gap/(2 x steps) before the reading. Usage now is the last step's crossing
-# (a reading rounds, so it showed k at k - 0.5) plus the pace since, kept within half a point of the reading.
+# Same output as project(), for the weekly limit: the pace expected over the next 12 hours, carried on to the reset.
+# Further out there is nothing to forecast, since you pace your use by what this shows. Half the pace now and half
+# the window's average so far: bursts mostly fade within 12 hours. In backtests on real use this cut the 12-hour
+# error by a tenth against the pace now alone, on every stretch of data; it shows half of a lasting change of pace
+# in about 10 hours.
+# The pace now (half-life given): the reading only moves in whole percents, so the pace comes from when it went up:
+# recency-weighted percents per hour over the intervals between steps. The time since the last step counts only
+# once it is longer than the pace implies, as if a step happened now, so the pace eases down instead of see-sawing.
+# Usage across a gap in the readings (no session running) is taken as spread evenly over it, so the last step in it
+# lands gap/(2 x steps) before the reading. Usage now is the last step's crossing (a reading rounds, so it showed k
+# at k - 0.5) plus the pace since, kept within half a point of the reading.
 step_pace() { # file used_percent reset_epoch window_seconds half_life_seconds
   awk -v p="$2" -v r="$3" -v w="$4" -v hl="$5" -v now="$now" '
     $1 == "#" { if ($2 == "start") s = $3; next }
@@ -256,9 +259,10 @@ step_pace() { # file used_percent reset_epoch window_seconds half_life_seconds
       cur = sy[m] - (m > 0 ? 0.5 : 0) + (pace * gap < 1 ? pace * gap : 1)
       if (cur > p + 0.5) cur = p + 0.5; if (cur < p - 0.5) cur = p - 0.5; if (cur < 0) cur = 0
       if (p >= 100) { print 0, p, 0; exit }
+      rate = (pace + p / ((now - start) / 3600)) / 2
       H = (r - now) / 3600; if (H < 0) H = 0
-      out = pace > 0 ? int((100 - cur) / pace * 3600) : -1
-      printf "%d %.2f %.4f\n", out, cur + pace * H, pace
+      out = rate > 0 ? int((100 - cur) / rate * 3600) : -1
+      printf "%d %.2f %.4f\n", out, cur + rate * H, rate
     }' "$1"
 }
 
@@ -318,7 +322,8 @@ fi
 
 line="${c_label}ctx${rst} ${ctx}"
 # 5h: sample every 2 min, fitted curve with a 1 h half-life (over a few hours the recent trend holds).
-# Week: sample every 15 min, the pace now from the whole-percent steps with a 4 h half-life.
+# Week: sample every 15 min; the next 12 hours from half the pace now (whole-percent steps, 4 h half-life) and
+# half the window average.
 fh=$(limit 5h "$fh_pct" "$fh_reset" 18000 120 3600 5h project); [[ -n $fh ]] && line+="${sep}${fh}"
 wk=$(limit wk "$wk_pct" "$wk_reset" 604800 900 14400 week step_pace); [[ -n $wk ]] && line+="${sep}${wk}"
 line+="${sep}${c_label}${model}${rst}"
